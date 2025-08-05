@@ -19,6 +19,7 @@ def start_worker(device_id: int):
     # 设置环境变量
     env = os.environ.copy()
     env.update(config.get_gpu_env_vars(device_id))
+    env.update({"C_FORCE_ROOT": "1"})
     
     # 构建Worker启动命令
     cmd = [
@@ -39,8 +40,8 @@ def start_worker(device_id: int):
     process = subprocess.Popen(
         cmd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        # stdout=subprocess.PIPE,
+        # stderr=subprocess.PIPE,
         text=True
     )
     

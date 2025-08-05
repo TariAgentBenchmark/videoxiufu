@@ -14,11 +14,13 @@ from torchvision.transforms.functional import to_tensor
 from celery_app import celery_app
 from tgsr.models.hat_model import HATModel
 
+torch_npu.npu.set_compile_mode(jit_compile=False)
+
 
 class GPUWorker:
     """GPU Worker类 - 封装模型加载和推理逻辑"""
     
-    def __init__(self, device_id: int, config_path: str = "options/video.yml"):
+    def __init__(self, config_path: str = "options/video.yml"):
         """
         初始化GPU Worker
         
@@ -26,18 +28,10 @@ class GPUWorker:
             device_id: GPU设备ID
             config_path: 模型配置文件路径
         """
-        self.device_id = device_id
+        self.device_id = os.environ.get("ASCEND_RT_VISIBLE_DEVICES", "0")
         self.config_path = config_path
         self.model = None
-        self._setup_device()
         self._load_model()
-    
-    def _setup_device(self):
-        """设置GPU设备"""
-        # 设置华为昇腾NPU设备
-        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = str(self.device_id)
-        torch_npu.npu.set_compile_mode(jit_compile=False)
-        print(f"Worker初始化 - GPU设备: {self.device_id}")
     
     def _load_model(self):
         """加载HAT模型"""
@@ -45,7 +39,6 @@ class GPUWorker:
             opt = yaml.safe_load(f)
         
         self.model = HATModel(opt)
-        self.model.eval()
         print(f"GPU {self.device_id} 模型加载完成")
     
     def process_frame(self, frame_data: bytes, frame_idx: int, down_sample: bool = True) -> bytes:
@@ -111,7 +104,7 @@ class GPUWorker:
 
 
 # 全局Worker实例（每个进程一个）
-_worker_instance = None
+_worker_instance = GPUWorker()
 
 
 def get_worker_instance():
