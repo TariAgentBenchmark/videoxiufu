@@ -1,3 +1,15 @@
+## 容器化启动
+启动redis
+```
+docker run -p 6379:6379 -d --name celery_redis m.daocloud.io/docker.io/redis:6.2.19
+```
+
+启动容器
+```
+docker run --privileged --network=host    --name videosr     --device /dev/davinci1     --device /dev/davinci_manager     --device /dev/devmm_svm     --device /dev/hisi_hdc     -v /usr/local/dcmi:/usr/local/dcmi     -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi     -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info     -v /etc/ascend_install.info:/etc/ascend_install.info -itd videosr:latest
+```
+
+## 手动启动
 ### 环境要求
 
 PyTorch >= 2.0.1 CUDA>=12.1 (或华为昇腾NPU环境)
