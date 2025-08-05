@@ -8,9 +8,9 @@ celery_app = Celery("video_sr_processor")
 
 # Celery配置
 celery_app.conf.update(
-    # 使用内存作为消息代理和结果后端 (简单的memory backend)
-    broker_url="memory://",
-    result_backend="cache+memory://",
+    # 使用Redis作为消息代理和结果后端
+    broker_url="redis://localhost:6379/0",
+    result_backend="redis://localhost:6379/1",
     
     # 任务序列化设置
     task_serializer="pickle",
@@ -36,4 +36,7 @@ celery_app.conf.update(
     
     # 并发设置
     worker_concurrency=1,  # 每个worker进程数，由于GPU内存限制设为1
+    
+    # 多进程启动方法设置 - 华为昇腾NPU需要spawn方法
+    worker_pool='solo',  # 使用solo pool避免multiprocessing问题
 )

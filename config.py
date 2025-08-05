@@ -20,8 +20,8 @@ class MultiGPUConfig:
         
         # Celery配置
         self.celery_config = {
-            "broker_url": "memory://",
-            "result_backend": "cache+memory://",
+            "broker_url": "redis://localhost:6379/0",
+            "result_backend": "redis://localhost:6379/1",
             "worker_concurrency": 1,  # 每个GPU一个进程
             "task_time_limit": 300,  # 5分钟任务超时
         }
