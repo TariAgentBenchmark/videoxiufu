@@ -26,15 +26,34 @@ video_processor: Optional[MultiGPUVideoProcessor] = None
 
 class VideoProcessRequest(BaseModel):
     """视频处理请求"""
-    video_url: str  # RTSP流地址或视频URL
+    video_url: str  # RTSP流地址、视频URL或本地文件路径
     down_sample: bool = True  # 是否下采样
     
     @validator('video_url')
     def validate_video_url(cls, v):
-        """验证视频URL必须是流地址或在线视频"""
-        if not v.startswith(("rtsp://", "rtmp://", "http://", "https://")):
-            raise ValueError("只支持RTSP流和在线视频URL，不支持本地文件路径")
-        return v
+        """验证视频URL或本地文件路径"""
+        # 检查是否为流地址或在线视频URL
+        if v.startswith(("rtsp://", "rtmp://", "http://", "https://")):
+            return v
+        
+        # 检查是否为本地文件路径
+        if os.path.isfile(v):
+            # 验证文件扩展名是否为视频格式
+            video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.m4v', '.webm'}
+            file_ext = Path(v).suffix.lower()
+            if file_ext not in video_extensions:
+                raise ValueError(f"不支持的视频格式: {file_ext}。支持的格式: {', '.join(video_extensions)}")
+            return v
+        
+        # 如果不是URL也不是存在的文件，则检查是否为有效的路径格式
+        try:
+            path = Path(v)
+            if path.is_absolute() or any(part in v for part in ['/', '\\']):
+                raise ValueError(f"本地文件不存在: {v}")
+        except Exception:
+            pass
+        
+        raise ValueError("请提供有效的RTSP流地址、在线视频URL或本地视频文件路径")
 
 
 class FrameProcessResult(BaseModel):
