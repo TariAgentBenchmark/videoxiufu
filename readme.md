@@ -9,6 +9,12 @@ docker run -p 6379:6379 -d --name celery_redis m.daocloud.io/docker.io/redis:6.2
 docker run --privileged --network=host    --name videosr     --device /dev/davinci1     --device /dev/davinci_manager     --device /dev/devmm_svm     --device /dev/hisi_hdc     -v /usr/local/dcmi:/usr/local/dcmi     -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi     -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info     -v /etc/ascend_install.info:/etc/ascend_install.info -itd videosr:latest
 ```
 
+使用curl测试
+```
+curl -X POST "http://localhost:8000/process_video" -H "Content-Type: application/json" -d '{"video_url": "input/videos/example.mp4", "down_sample": true} > output.txt
+```
+测试输出结果会输出到output.txt
+
 ## 手动启动
 ### 环境要求
 
