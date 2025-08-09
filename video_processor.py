@@ -15,16 +15,22 @@ from celery import group
 from celery_app import celery_app
 from worker import process_frame_task
 
-# 定义帧处理结果类（避免循环导入）
-class FrameProcessResult:
-    def __init__(self, video_id: str, segment_id: int, before_frame: str, 
-                 after_frame: str, before_segment_url: str, after_segment_url: str):
+# 定义片段处理结果类（避免循环导入）
+class SegmentProcessResult:
+    def __init__(self, video_id: str, segment_id: int, segment_start_time: float,
+                 segment_end_time: float, segment_frame_count: int, before_first_frame: str,
+                 after_first_frame: str, before_segment_url: str, after_segment_url: str,
+                 processing_time: float):
         self.video_id = video_id
         self.segment_id = segment_id
-        self.before_frame = before_frame
-        self.after_frame = after_frame
+        self.segment_start_time = segment_start_time
+        self.segment_end_time = segment_end_time
+        self.segment_frame_count = segment_frame_count
+        self.before_first_frame = before_first_frame
+        self.after_first_frame = after_first_frame
         self.before_segment_url = before_segment_url
         self.after_segment_url = after_segment_url
+        self.processing_time = processing_time
     
     def json(self):
         """返回JSON格式字符串"""
@@ -32,10 +38,14 @@ class FrameProcessResult:
         return json.dumps({
             "video_id": self.video_id,
             "segment_id": self.segment_id,
-            "before_frame": self.before_frame,
-            "after_frame": self.after_frame,
+            "segment_start_time": self.segment_start_time,
+            "segment_end_time": self.segment_end_time,
+            "segment_frame_count": self.segment_frame_count,
+            "before_first_frame": self.before_first_frame,
+            "after_first_frame": self.after_first_frame,
             "before_segment_url": self.before_segment_url,
-            "after_segment_url": self.after_segment_url
+            "after_segment_url": self.after_segment_url,
+            "processing_time": self.processing_time
         })
 
 
@@ -106,180 +116,7 @@ class MultiGPUVideoProcessor:
                 self.task_status[task_id] = "failed"
             raise e
     
-    async def process_video_stream(self, video_url: str, video_id: str, 
-                                 down_sample: bool = True) -> AsyncGenerator[FrameProcessResult, None]:
-        """
-        流式处理视频 - 逐帧处理并返回结果
-        
-        Args:
-            video_url: 视频流URL
-            video_id: 视频ID
-            down_sample: 是否下采样
-            
-        Yields:
-            FrameProcessResult: 每帧的处理结果
-        """
-        # 添加RTSP连接重试逻辑
-        max_retries = 5
-        cap = None
-        
-        for retry in range(max_retries):
-            print(f"尝试连接视频流: {video_url} (第{retry+1}次)")
-            
-            cap = cv2.VideoCapture(video_url)
-            
-            # 设置更宽松的超时参数
-            if video_url.startswith("rtsp://"):
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 减少缓冲
-                cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            if cap.isOpened():
-                # 尝试读取第一帧验证连接
-                ret, test_frame = cap.read()
-                if ret and test_frame is not None:
-                    print(f"✓ 视频流连接成功: {video_url}")
-                    # 重置到开始位置
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    break
-                else:
-                    print(f"视频流连接但无法读取帧，重试...")
-                    cap.release()
-            else:
-                print(f"无法打开视频流，{3-retry}秒后重试...")
-            
-            if retry < max_retries - 1:
-                await asyncio.sleep(3)
-        else:
-            if cap:
-                cap.release()
-            raise ValueError(f"多次重试后仍无法打开视频流: {video_url}")
-        
-        frame_idx = 0
-        pending_tasks = {}  # 存储待完成的任务
-        
-        print(f"开始流式处理视频: {video_url}")
-        
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("视频流结束或无法读取更多帧")
-                break
-            
-            # 保存原始帧到临时文件
-            before_path = f"temp_frames/before_{video_id}_{frame_idx}.jpg"
-            cv2.imwrite(before_path, frame)
-            
-            # 编码原始帧为base64
-            ret_encode, buffer = cv2.imencode('.jpg', frame)
-            if not ret_encode:
-                print(f"帧 {frame_idx} 编码失败，跳过")
-                frame_idx += 1
-                continue
-            
-            before_frame_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')
-            frame_bytes = buffer.tobytes()
-            
-            # 提交帧处理任务
-            task = process_frame_task.apply_async(
-                args=[frame_bytes, frame_idx, down_sample]
-            )
-            pending_tasks[frame_idx] = {
-                'task': task,
-                'before_frame_b64': before_frame_b64,
-                'before_path': before_path
-            }
-            
-            print(f"提交第 {frame_idx} 帧处理任务")
-            
-            # 检查已完成的任务
-            completed_frames = []
-            for idx, task_info in list(pending_tasks.items()):
-                if task_info['task'].ready():
-                    completed_frames.append(idx)
-            
-            # 处理完成的任务
-            for idx in sorted(completed_frames):
-                task_info = pending_tasks[idx]
-                result = task_info['task'].result
-                
-                if result["success"]:
-                    # 保存处理后的帧
-                    after_path = f"temp_frames/after_{video_id}_{idx}.jpg"
-                    nparr = np.frombuffer(result["result_data"], np.uint8)
-                    processed_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    cv2.imwrite(after_path, processed_frame)
-                    
-                    # 编码处理后帧为base64
-                    after_frame_b64 = base64.b64encode(result["result_data"]).decode('utf-8')
-                    
-                    # 创建结果对象
-                    frame_result = FrameProcessResult(
-                        video_id=video_id,
-                        segment_id=idx,
-                        before_frame=f"data:image/jpeg;base64,{task_info['before_frame_b64']}",
-                        after_frame=f"data:image/jpeg;base64,{after_frame_b64}",
-                        before_segment_url=f"/{task_info['before_path']}",
-                        after_segment_url=f"/{after_path}"
-                    )
-                    
-                    yield frame_result
-                    print(f"第 {idx} 帧处理完成并返回")
-                else:
-                    print(f"第 {idx} 帧处理失败: {result['error']}")
-                
-                # 清理已完成的任务
-                del pending_tasks[idx]
-            
-            frame_idx += 1
-            
-            # 限制最大帧数
-            if frame_idx > 10000:
-                print("达到最大帧数限制，停止处理")
-                break
-            
-            # 短暂延迟避免过快处理
-            await asyncio.sleep(0.01)
-        
-        # 等待所有剩余任务完成
-        print("等待剩余任务完成...")
-        while pending_tasks:
-            completed_frames = []
-            for idx, task_info in list(pending_tasks.items()):
-                if task_info['task'].ready():
-                    completed_frames.append(idx)
-            
-            for idx in sorted(completed_frames):
-                task_info = pending_tasks[idx]
-                result = task_info['task'].result
-                
-                if result["success"]:
-                    after_path = f"temp_frames/after_{video_id}_{idx}.jpg"
-                    nparr = np.frombuffer(result["result_data"], np.uint8)
-                    processed_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    cv2.imwrite(after_path, processed_frame)
-                    
-                    after_frame_b64 = base64.b64encode(result["result_data"]).decode('utf-8')
-                    
-                    frame_result = FrameProcessResult(
-                        video_id=video_id,
-                        segment_id=idx,
-                        before_frame=f"data:image/jpeg;base64,{task_info['before_frame_b64']}",
-                        after_frame=f"data:image/jpeg;base64,{after_frame_b64}",
-                        before_segment_url=f"/{task_info['before_path']}",
-                        after_segment_url=f"/{after_path}"
-                    )
-                    
-                    yield frame_result
-                    print(f"第 {idx} 帧处理完成并返回")
-                
-                del pending_tasks[idx]
-            
-            if pending_tasks:
-                await asyncio.sleep(0.1)
-        
-        cap.release()
-        print(f"视频 {video_id} 处理完成")
-    
+
     async def _extract_frames(self, video_path: str) -> List[tuple]:
         """
         提取视频帧
@@ -449,3 +286,172 @@ class MultiGPUVideoProcessor:
         """清理任务状态"""
         if task_id in self.task_status:
             del self.task_status[task_id]
+    
+    async def process_video_segments(self, video_url: str, video_id: str, 
+                                   down_sample: bool = True, segment_duration: float = 30.0,
+                                   segment_max_frames: int = 600) -> AsyncGenerator[SegmentProcessResult, None]:
+        """
+        分段处理视频，每处理完一个片段就返回结果
+        
+        Args:
+            video_url: 视频URL或路径
+            video_id: 视频ID
+            down_sample: 是否下采样
+            segment_duration: 片段时长（秒）
+            segment_max_frames: 片段最大帧数
+            
+        Yields:
+            SegmentProcessResult: 每个片段的处理结果
+        """
+        import time
+        
+        # 创建输出目录
+        os.makedirs("data/output_segments", exist_ok=True)
+        os.makedirs("data/temp_frames", exist_ok=True)
+        
+        # 获取视频信息
+        video_info = await self._get_video_info(video_url)
+        fps = video_info.get("fps", 30)
+        
+        # 计算每个片段的帧数
+        frames_per_segment = min(int(segment_duration * fps), segment_max_frames)
+        
+        cap = cv2.VideoCapture(video_url)
+        if not cap.isOpened():
+            raise ValueError(f"无法打开视频: {video_url}")
+        
+        segment_id = 0
+        
+        try:
+            while True:
+                start_time = time.time()
+                
+                # 提取当前片段的帧
+                segment_frames = []
+                frame_idx = 0
+                
+                while frame_idx < frames_per_segment:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                        
+                    # 编码帧为bytes
+                    ret_encode, buffer = cv2.imencode('.jpg', frame)
+                    if ret_encode:
+                        segment_frames.append((frame_idx, buffer.tobytes()))
+                        frame_idx += 1
+                
+                # 如果没有更多帧，退出
+                if not segment_frames:
+                    break
+                
+                # 计算片段时间信息
+                segment_start_time = segment_id * segment_duration
+                segment_end_time = segment_start_time + (len(segment_frames) / fps)
+                
+                # 分布式处理当前片段的帧
+                processed_frames = await self._process_frames_distributed(
+                    segment_frames, down_sample, f"{video_id}_segment_{segment_id}"
+                )
+                
+                if not processed_frames:
+                    segment_id += 1
+                    continue
+                
+                # 保存原始片段视频
+                before_segment_path = f"data/output_segments/{video_id}_segment_{segment_id}_before.mp4"
+                await self._save_segment_video(segment_frames, before_segment_path, fps)
+                
+                # 保存处理后片段视频
+                after_segment_path = f"data/output_segments/{video_id}_segment_{segment_id}_after.mp4"
+                await self._save_segment_video(processed_frames, after_segment_path, fps)
+                
+                # 根据环境变量返回绝对路径或相对路径
+                mount_path = os.environ.get('DATA_MOUNT_PATH')
+                if mount_path:
+                    # 如果设置了挂载路径环境变量，返回绝对路径
+                    before_segment_url = f"{mount_path}/output_segments/{video_id}_segment_{segment_id}_before.mp4"
+                    after_segment_url = f"{mount_path}/output_segments/{video_id}_segment_{segment_id}_after.mp4"
+                else:
+                    # 否则返回相对路径
+                    before_segment_url = before_segment_path
+                    after_segment_url = after_segment_path
+                
+                # 获取第一帧的base64编码（处理前后对比）
+                before_first_frame_b64 = self._frame_to_base64(segment_frames[0][1])
+                after_first_frame_b64 = self._frame_to_base64(processed_frames[0][1])
+                
+                # 计算处理时间
+                processing_time = time.time() - start_time
+                
+                # 生成片段处理结果
+                segment_result = SegmentProcessResult(
+                    video_id=video_id,
+                    segment_id=segment_id,
+                    segment_start_time=segment_start_time,
+                    segment_end_time=segment_end_time,
+                    segment_frame_count=len(processed_frames),
+                    before_first_frame=before_first_frame_b64,
+                    after_first_frame=after_first_frame_b64,
+                    before_segment_url=before_segment_url,
+                    after_segment_url=after_segment_url,
+                    processing_time=processing_time
+                )
+                
+                yield segment_result
+                segment_id += 1
+                
+        finally:
+            cap.release()
+    
+    async def _save_segment_video(self, frames_data: List[tuple], output_path: str, fps: float):
+        """
+        保存视频片段
+        
+        Args:
+            frames_data: 帧数据列表 [(frame_idx, frame_bytes), ...]
+            output_path: 输出路径
+            fps: 帧率
+        """
+        def save_sync():
+            if not frames_data:
+                return
+            
+            # 获取第一帧来确定视频尺寸
+            first_frame_data = frames_data[0][1]
+            nparr = np.frombuffer(first_frame_data, np.uint8)
+            first_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            height, width = first_frame.shape[:2]
+            
+            # 创建视频写入器
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            
+            if not video_writer.isOpened():
+                raise ValueError(f"无法创建视频写入器: {output_path}")
+            
+            # 写入所有帧
+            for frame_idx, frame_data in frames_data:
+                nparr = np.frombuffer(frame_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    video_writer.write(frame)
+            
+            video_writer.release()
+        
+        # 在线程池中执行同步操作
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, save_sync)
+    
+    def _frame_to_base64(self, frame_bytes: bytes) -> str:
+        """
+        将帧数据转换为base64编码
+        
+        Args:
+            frame_bytes: 帧的bytes数据
+            
+        Returns:
+            base64编码的字符串
+        """
+        return base64.b64encode(frame_bytes).decode('utf-8')

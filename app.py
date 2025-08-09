@@ -28,6 +28,8 @@ class VideoProcessRequest(BaseModel):
     """视频处理请求"""
     video_url: str  # RTSP流地址、视频URL或本地文件路径
     down_sample: bool = True  # 是否下采样
+    segment_duration: float = 30.0  # 分段时长（秒），默认30秒
+    segment_max_frames: int = 600  # 分段最大帧数，默认600帧
     
     @validator('video_url')
     def validate_video_url(cls, v):
@@ -56,14 +58,18 @@ class VideoProcessRequest(BaseModel):
         raise ValueError("请提供有效的RTSP流地址、在线视频URL或本地视频文件路径")
 
 
-class FrameProcessResult(BaseModel):
-    """单帧处理结果"""
+class SegmentProcessResult(BaseModel):
+    """视频片段处理结果"""
     video_id: str  # 视频ID（对应task_id）
-    segment_id: int  # 帧序号
-    before_frame: str  # 处理前的帧图像（base64编码）
-    after_frame: str  # 处理后的帧图像（base64编码）
-    before_segment_url: str  # 处理前帧的临时存储路径
-    after_segment_url: str  # 处理后帧的临时存储路径
+    segment_id: int  # 片段序号
+    segment_start_time: float  # 片段开始时间（秒）
+    segment_end_time: float  # 片段结束时间（秒）
+    segment_frame_count: int  # 片段包含的帧数
+    before_first_frame: str  # 处理前第一帧图像（base64编码）
+    after_first_frame: str  # 处理后第一帧图像（base64编码）
+    before_segment_url: str  # 处理前视频片段保存路径
+    after_segment_url: str  # 处理后视频片段保存路径
+    processing_time: float  # 处理耗时（秒）
 
 
 @app.on_event("startup")
@@ -72,7 +78,7 @@ async def startup_event():
     global video_processor
     
     # 创建临时存储目录
-    os.makedirs("temp_frames", exist_ok=True)
+    os.makedirs("data/temp_frames", exist_ok=True)
     
     # 初始化多GPU视频处理器
     video_processor = MultiGPUVideoProcessor(
@@ -87,13 +93,13 @@ async def startup_event():
 @app.post("/process_video")
 async def process_video(request: VideoProcessRequest):
     """
-    流式处理视频接口 - 使用SSE返回每帧处理结果
+    分段处理视频接口 - 使用SSE返回每个视频片段的处理结果
     
     Args:
-        request: 包含视频URL、下采样选项等的请求对象
+        request: 包含视频URL、下采样选项、分段配置等的请求对象
         
     Returns:
-        SSE流，每帧处理完成后推送JSON结果
+        SSE流，每个片段处理完成后推送JSON结果
     """
     if video_processor is None:
         raise HTTPException(status_code=500, detail="视频处理器未初始化")
@@ -103,13 +109,15 @@ async def process_video(request: VideoProcessRequest):
     
     async def generate_stream():
         """生成SSE流"""
-        async for frame_result in video_processor.process_video_stream(
+        async for segment_result in video_processor.process_video_segments(
             video_url=request.video_url,
             video_id=video_id,
-            down_sample=request.down_sample
+            down_sample=request.down_sample,
+            segment_duration=request.segment_duration,
+            segment_max_frames=request.segment_max_frames
         ):
             # 返回SSE格式数据
-            yield f"data: {frame_result.json()}\n\n"
+            yield f"data: {segment_result.json()}\n\n"
     
     return StreamingResponse(
         generate_stream(),

@@ -8,4 +8,14 @@ WORKDIR /app
 
 ADD . .
 
+# 创建统一的数据目录
+RUN mkdir -p \
+    /app/data/output_segments \
+    /app/data/temp_frames \
+    /app/data/output \
+    /app/data/input
+
+# 声明数据卷
+VOLUME ["/app/data"]
+
 ENTRYPOINT [ "bash", "run_system.sh" ]
