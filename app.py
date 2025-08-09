@@ -28,8 +28,8 @@ class VideoProcessRequest(BaseModel):
     """视频处理请求"""
     video_url: str  # RTSP流地址、视频URL或本地文件路径
     down_sample: bool = True  # 是否下采样
-    segment_duration: float = 30.0  # 分段时长（秒），默认30秒
-    segment_max_frames: int = 600  # 分段最大帧数，默认600帧
+    segment_duration: float = 10.0  # 分段时长（秒），默认30秒
+    segment_max_frames: int = 150  # 分段最大帧数，默认600帧
     
     @validator('video_url')
     def validate_video_url(cls, v):

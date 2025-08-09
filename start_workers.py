@@ -40,8 +40,8 @@ def start_worker(device_id: int):
     process = subprocess.Popen(
         cmd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        # stdout=subprocess.PIPE,
+        # stderr=subprocess.PIPE,
         text=True
     )
     
