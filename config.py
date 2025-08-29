@@ -9,8 +9,8 @@ class MultiGPUConfig:
     """多GPU配置类"""
     
     def __init__(self):
-        self.num_gpus = 8  # GPU数量
-        self.gpu_devices = list(range(8))  # GPU设备ID列表
+        self.num_gpus = 2  # GPU数量
+        self.gpu_devices = [0, 1]  # GPU设备ID列表
         self.config_path = "options/video.yml"  # 模型配置文件路径
         self.pretrained_weights = "pretrained_weights/RealHATGAN-TG.pth"  # 模型权重路径
         
